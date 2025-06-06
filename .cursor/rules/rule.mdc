@@ -1,0 +1,753 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+
+
+Reward System:
+
+Phase 1 Completion (Setup & Clone): 100 Points
+
+Phase 2 Completion (Core Installation): 200 Points
+
+Phase 3 Completion (Datastore Setup): 150 Points
+
+Phase 4 Completion (Basic VM Test): 250 Points
+
+Phase 5 Completion (Advanced Feature Tests - Snapshots, Resize, Save As): 300 Points
+
+Bonus for identifying and fixing any minor script/config issue not caught here: 100 Points
+
+Total Possible Points (excluding bonus): 1000 Points
+
+Cursor Rule: OpenNebula ZFS Add-on Integration & Testing (Expert Challenge)
+
+Description:
+This rule guides an expert OpenNebula administrator through cloning the toxpenguin/addon-zfs repository, installing it into an OpenNebula 6.8+ environment, configuring it, and performing a series of tests to validate its functionality. This is a complex operation; proceed with caution, preferably in a test environment.
+
+Trigger:
+Manually triggered by the user when ready to integrate the ZFS add-on.
+
+Context/Prerequisites (User MUST Confirm):
+
+OpenNebula Environment: A functional OpenNebula 6.8+ installation (Frontend + KVM Hypervisor(s)).
+
+{{opennebula_frontend_host}}: Hostname/IP of the OpenNebula frontend.
+
+{{opennebula_hypervisor_hosts}}: Comma-separated list of KVM hypervisor hostnames/IPs that will use ZFS.
+
+ZFS Installed & Configured: ZFS is installed and operational on all {{opennebula_hypervisor_hosts}} and on the {{opennebula_frontend_host}} if it will also host an image datastore directly.
+
+{{zfs_pool_name}}: The name of the ZFS pool to be used (e.g., rpool, onepool). This pool must exist on hypervisors.
+
+{{zfs_parent_dataset_images}}: Parent ZFS dataset for images (e.g., {{zfs_pool_name}}/ONE/images). Will be created if not existing.
+
+{{zfs_parent_dataset_system}}: Parent ZFS dataset for system datastore (VM running disks) (e.g., {{zfs_pool_name}}/ONE/system). Will be created if not existing.
+
+SSH Access: Passwordless SSH access as oneadmin from the frontend to all hypervisor nodes.
+
+Sudo Access: The oneadmin user must have passwordless sudo capabilities on the frontend and all hypervisors for specific commands (zfs, dd, qemu-img, sync). This rule will guide setting this up.
+
+Backup: Critical OpenNebula configuration (oned.conf, datastore definitions) and ZFS pool data should be backed up before proceeding.
+
+ONE_LOCATION: If not /var/lib/one, specify {{one_location_path}}. Default is /var/lib/one.
+
+Phase 1: Setup & Clone (100 Points)
+
+Action 1.1: Define Environment Variables (AI & User)
+
+# AI: Set these based on user input or defaults
+ONE_LOCATION="{{one_location_path:-/var/lib/one}}"
+REMOTE_DATATORE_DIR="$ONE_LOCATION/remotes/datastore"
+REMOTE_TM_DIR="$ONE_LOCATION/remotes/tm"
+ONED_CONF_PATH="/etc/one/oned.conf"
+VMM_EXECRC_PATH="/etc/one/vmm_exec/vmm_execrc" # Or $ONE_LOCATION/etc/vmm_exec/vmm_execrc
+REPO_URL="https://github.com/toxpenguin/addon-zfs.git"
+REPO_DIR_NAME="addon-zfs"
+CLONE_PATH="/tmp/$REPO_DIR_NAME" # Or a preferred persistent path
+ZFS_SUDOERS_FILE="/etc/sudoers.d/opennebula-zfs-addon"
+
+# For datastore templates later
+ZFS_IMAGE_DS_NAME="zfs-images-ds"
+ZFS_SYSTEM_DS_NAME="zfs-system-ds"
+BRIDGE_LIST_VAL="{{opennebula_frontend_host}}" # For image DS if it's managed on the frontend
+HYPERVISOR_HOST_FOR_SYSTEM_DS_BRIDGE="{{opennebula_hypervisor_hosts}}" # For system DS, should be the hypervisors
+
+
+Action 1.2: Clone the Repository (Frontend)
+
+# Execute on: {{opennebula_frontend_host}} as oneadmin or user with write perms to /tmp
+# AI: Ensure git is installed. If not, prompt user: sudo apt install git / sudo yum install git
+echo "Cloning {{REPO_URL}} to {{CLONE_PATH}}..."
+rm -rf "{{CLONE_PATH}}" # Clean up previous attempt
+git clone "{{REPO_URL}}" "{{CLONE_PATH}}"
+if [ $? -ne 0 ]; then echo "ERROR: Git clone failed."; exit 1; fi
+echo "Repository cloned successfully."
+ls -la "{{CLONE_PATH}}"
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Shell
+IGNORE_WHEN_COPYING_END
+
+Verification 1.2: Directory {{CLONE_PATH}} exists and contains files like README.md, datastore/, tm/.
+Reward 1.2: 100 Points upon successful clone and verification.
+
+Phase 2: Core Installation (200 Points)
+
+Action 2.1: Copy Driver Files (Frontend)
+
+# Execute on: {{opennebula_frontend_host}} as oneadmin (or root and chown later)
+echo "Copying datastore and transfer manager files..."
+sudo mkdir -p "$REMOTE_DATATORE_DIR/zfs"
+sudo mkdir -p "$REMOTE_TM_DIR/zfs"
+
+sudo cp -R "{{CLONE_PATH}}/datastore/zfs/"* "$REMOTE_DATATORE_DIR/zfs/"
+sudo cp -R "{{CLONE_PATH}}/tm/zfs/"* "$REMOTE_TM_DIR/zfs/"
+
+sudo chown -R oneadmin:oneadmin "$REMOTE_DATATORE_DIR/zfs"
+sudo chown -R oneadmin:oneadmin "$REMOTE_TM_DIR/zfs"
+sudo chmod -R u+rx "$REMOTE_DATATORE_DIR/zfs/"
+sudo chmod -R u+rx "$REMOTE_TM_DIR/zfs/"
+
+echo "Driver files copied and permissions set."
+ls -la "$REMOTE_DATATORE_DIR/zfs/"
+ls -la "$REMOTE_TM_DIR/zfs/"
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Shell
+IGNORE_WHEN_COPYING_END
+
+Verification 2.1: Check that files exist in $REMOTE_DATATORE_DIR/zfs/ and $REMOTE_TM_DIR/zfs/ with correct ownership (oneadmin:oneadmin) and execute permissions for the owner.
+
+Action 2.2: Configure oned.conf (Frontend)
+AI: Guide the user to make these changes. Provide the "before" and "after" based on the addon's README diff. This is the most complex manual step.
+
+# Execute on: {{opennebula_frontend_host}}
+# AI: Instruct user to backup $ONED_CONF_PATH before editing.
+echo "Please edit $ONED_CONF_PATH. Apply the following changes as per the addon's README:"
+
+echo "1. Modify TM_MAD section:"
+echo "   Locate the TM_MAD block. In its ARGUMENTS (or arguments) line, append ',zfs' to the list of drivers."
+echo "   Example BEFORE (might vary):"
+echo "   TM_MAD = ["
+echo "       EXECUTABLE = \"one_tm\","
+echo "       ARGUMENTS = \"-t 15 -d dummy,lvm,shared,fs_lvm,fs_lvm_ssh,qcow2,ssh,ceph,dev,vcenter,iscsi_libvirt\""
+echo "   ]"
+echo "   Example AFTER:"
+echo "   TM_MAD = ["
+echo "       EXECUTABLE = \"one_tm\","
+echo "       ARGUMENTS = \"-t 15 -d dummy,lvm,shared,fs_lvm,fs_lvm_ssh,qcow2,ssh,ceph,dev,vcenter,iscsi_libvirt,zfs\""
+echo "   ]"
+
+echo "2. Add/Modify TM_MAD_CONF section for zfs:"
+echo "   If a TM_MAD_CONF for 'zfs' exists, ensure it matches. If not, add this new block (usually after other TM_MAD_CONF blocks or before DATASTORE_MAD):"
+echo "   TM_MAD_CONF = ["
+echo "       NAME = \"zfs\", LN_TARGET = \"NONE\", CLONE_TARGET = \"SELF\", DRIVER = \"raw\", SHARED = \"YES\","
+echo "       TM_MAD_SYSTEM = \"shared\", LN_TARGET_SHARED = \"NONE\", CLONE_TARGET_SHARED = \"SELF\","
+echo "       DISK_TYPE_SHARED = \"BLOCK\", ALLOW_ORPHANS=\"MIXED\""
+echo "   ]"
+
+echo "3. Modify DATASTORE_MAD section:"
+echo "   Locate the DATASTORE_MAD block. In its ARGUMENTS (or arguments) line, append ',zfs' to the list of datastore drivers AND system datastore transfer managers (-s flag)."
+echo "   Example BEFORE (might vary):"
+echo "   DATASTORE_MAD = ["
+echo "       EXECUTABLE = \"one_datastore\","
+echo "       ARGUMENTS  = \"-t 15 -d dummy,fs,lvm,ceph,dev,iscsi_libvirt,vcenter,restic,rsync -s shared,ssh,ceph,fs_lvm,fs_lvm_ssh,qcow2,vcenter\""
+echo "   ]"
+echo "   Example AFTER:"
+echo "   DATASTORE_MAD = ["
+echo "       EXECUTABLE = \"one_datastore\","
+echo "       ARGUMENTS  = \"-t 15 -d dummy,fs,lvm,ceph,dev,iscsi_libvirt,vcenter,restic,rsync,zfs -s shared,ssh,ceph,fs_lvm,fs_lvm_ssh,qcow2,vcenter,zfs\""
+echo "   ]"
+
+echo "4. Add/Modify DS_MAD_CONF section for zfs:"
+echo "   If a DS_MAD_CONF for 'zfs' exists, ensure it matches. If not, add this new block (usually after other DS_MAD_CONF blocks):"
+echo "   DS_MAD_CONF = ["
+echo "       NAME = \"zfs\", REQUIRED_ATTRS = \"DISK_TYPE\", PERSISTENT_ONLY = \"NO\""
+echo "   ]"
+
+echo "After making changes, save the file."
+read -p "Press [Enter] once you have edited and saved $ONED_CONF_PATH..."
+# AI: Optionally, ask user to display modified sections or diff for verification.
+sudo opennebula-server status # Quick check if oned still parses config, not a full validation
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Text
+IGNORE_WHEN_COPYING_END
+
+Verification 2.2: User confirms changes are made. sudo oned -t can be used to test configuration file syntax.
+
+Action 2.3: Configure vmm_execrc for Live Snapshots (Frontend)
+
+# Execute on: {{opennebula_frontend_host}}
+# AI: Instruct user to backup $VMM_EXECRC_PATH before editing.
+echo "Please edit $VMM_EXECRC_PATH to enable ZFS live snapshots."
+echo "Locate the LIVE_DISK_SNAPSHOTS line."
+echo "Append 'kvm-zfs qemu-zfs' to the existing list."
+echo "Example BEFORE (might vary):"
+echo 'LIVE_DISK_SNAPSHOTS="kvm-qcow2 kvm-shared kvm-ceph kvm-ssh qemu-qcow2 qemu-shared qemu-ceph qemu-ssh"'
+echo "Example AFTER:"
+echo 'LIVE_DISK_SNAPSHOTS="kvm-qcow2 kvm-shared kvm-ceph kvm-ssh qemu-qcow2 qemu-shared qemu-ceph qemu-ssh kvm-zfs qemu-zfs"'
+echo "After making changes, save the file."
+read -p "Press [Enter] once you have edited and saved $VMM_EXECRC_PATH..."
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Text
+IGNORE_WHEN_COPYING_END
+
+Verification 2.3: User confirms changes are made.
+
+Action 2.4: Configure Sudoers (Frontend & Hypervisors)
+AI: The oneadmin user needs passwordless sudo for specific commands. This must be applied on the OpenNebula frontend AND ALL hypervisor nodes ({{opennebula_hypervisor_hosts}}).
+
+# AI: Prepare this content
+SUDOERS_CONTENT="Defaults:oneadmin !requiretty
+oneadmin ALL=(root) NOPASSWD: /usr/sbin/zfs
+oneadmin ALL=(root) NOPASSWD: /sbin/zfs
+oneadmin ALL=(root) NOPASSWD: /bin/dd
+oneadmin ALL=(root) NOPASSWD: /usr/bin/qemu-img
+oneadmin ALL=(root) NOPASSWD: /bin/sync
+oneadmin ALL=(root) NOPASSWD: /usr/bin/sync"
+
+echo "The following sudoers configuration needs to be applied on the OpenNebula frontend AND ALL hypervisor nodes listed: {{opennebula_hypervisor_hosts}}"
+echo "Content to add to $ZFS_SUDOERS_FILE:"
+echo "---"
+echo "$SUDOERS_CONTENT"
+echo "---"
+echo "On each relevant host, execute as root:"
+echo "echo \"$SUDOERS_CONTENT\" | sudo tee $ZFS_SUDOERS_FILE"
+echo "sudo chmod 0440 $ZFS_SUDOERS_FILE"
+read -p "Press [Enter] once you have applied this sudoers configuration on ALL required hosts..."
+
+echo "Also ensure 'oneadmin' belongs to the 'disk' group on KVM hypervisors (usually already done during OpenNebula node setup):"
+echo "Example: sudo usermod -a -G disk oneadmin # (Run on each hypervisor)"
+read -p "Press [Enter] if 'oneadmin' is part of the 'disk' group on hypervisors..."
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Text
+IGNORE_WHEN_COPYING_END
+
+Verification 2.4: User confirms sudoers and group membership are set on all relevant hosts.
+
+Action 2.5: Restart OpenNebula Services (Frontend)
+
+# Execute on: {{opennebula_frontend_host}}
+echo "Restarting OpenNebula services..."
+sudo systemctl restart opennebula
+sudo systemctl restart opennebula-sunstone # If Sunstone is used
+# Check status
+sleep 5
+sudo systemctl status opennebula
+sudo systemctl status opennebula-sunstone
+# AI: Instruct user to check /var/log/one/oned.log for errors related to MAD loading or ZFS.
+echo "Please check /var/log/one/oned.log for any errors after restart, especially related to 'zfs' MADs."
+read -p "Press [Enter] after checking logs..."
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Shell
+IGNORE_WHEN_COPYING_END
+
+Verification 2.5: OpenNebula services restart without critical errors. oned.log shows the zfs TM and DS drivers being loaded successfully.
+Reward 2.5: 200 Points if all steps in Phase 2 are successful and verified.
+
+Phase 3: ZFS Datastore Setup (150 Points)
+
+Action 3.1: Create Parent ZFS Datasets (Hypervisors for System, Frontend/ZFS-Host for Images)
+AI: This might need to be done on different hosts depending on architecture.
+
+# Execute on EACH hypervisor in {{opennebula_hypervisor_hosts}} for system datastore
+echo "On EACH hypervisor ({{opennebula_hypervisor_hosts}}), run:"
+echo "sudo zfs create -o mountpoint=legacy {{zfs_parent_dataset_system}} || echo 'Dataset likely already exists or error creating'"
+echo "sudo zfs set compression=lz4 {{zfs_parent_dataset_system}}"
+echo "sudo zfs set atime=off {{zfs_parent_dataset_system}}"
+echo "If this dataset will be mounted by OpenNebula under /var/lib/one/datastores, ensure oneadmin has permissions to mount/manage sub-paths."
+
+# Execute on {{opennebula_frontend_host}} OR a dedicated ZFS storage host for image datastore
+echo "On {{opennebula_frontend_host}} (or your ZFS image host), run:"
+echo "sudo zfs create -o mountpoint=legacy {{zfs_parent_dataset_images}} || echo 'Dataset likely already exists or error creating'"
+echo "sudo zfs set compression=lz4 {{zfs_parent_dataset_images}}"
+echo "sudo zfs set atime=off {{zfs_parent_dataset_images}}"
+read -p "Press [Enter] once parent ZFS datasets are prepared..."
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Shell
+IGNORE_WHEN_COPYING_END
+
+Verification 3.1: sudo zfs list on relevant hosts shows the datasets {{zfs_parent_dataset_images}} and {{zfs_parent_dataset_system}} exist.
+
+Action 3.2: Create OpenNebula Image Datastore (Frontend)
+
+# Execute on: {{opennebula_frontend_host}}
+echo "Creating ZFS Image Datastore template (image_ds.conf)..."
+cat << EOF > /tmp/image_ds.conf
+NAME = "{{ZFS_IMAGE_DS_NAME}}"
+DS_MAD = "zfs"
+TM_MAD = "zfs"
+DISK_TYPE = "BLOCK"
+DATASET_NAME = "{{zfs_parent_dataset_images}}" # e.g. rpool/ONE/images
+BRIDGE_LIST = "{{BRIDGE_LIST_VAL}}" # Host where ZFS commands for this DS are run (e.g., frontend)
+TYPE = "IMAGE_DS"
+EOF
+
+echo "Creating OpenNebula Image Datastore '{{ZFS_IMAGE_DS_NAME}}'..."
+onedatastore create /tmp/image_ds.conf
+if [ $? -ne 0 ]; then echo "ERROR: Failed to create image datastore."; exit 1; fi
+onedatastore list
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Shell
+IGNORE_WHEN_COPYING_END
+
+Verification 3.2: onedatastore list shows the new image datastore. onedatastore show <ID> shows correct attributes.
+
+Action 3.3: Create OpenNebula System Datastore (Frontend)
+
+# Execute on: {{opennebula_frontend_host}}
+echo "Creating ZFS System Datastore template (system_ds.conf)..."
+cat << EOF > /tmp/system_ds.conf
+NAME = "{{ZFS_SYSTEM_DS_NAME}}"
+DS_MAD = "zfs" # System Datastore doesn't use DS_MAD in the same way, but TM_MAD is key
+TM_MAD = "zfs"
+TYPE = "SYSTEM_DS"
+DATASET_NAME = "{{zfs_parent_dataset_system}}" # e.g. rpool/ONE/system (used by TM scripts on hypervisors)
+BRIDGE_LIST = "{{HYPERVISOR_HOST_FOR_SYSTEM_DS_BRIDGE}}" # Hypervisors where ZFS system disks will reside
+EOF
+
+echo "Creating OpenNebula System Datastore '{{ZFS_SYSTEM_DS_NAME}}'..."
+onedatastore create /tmp/system_ds.conf
+if [ $? -ne 0 ]; then echo "ERROR: Failed to create system datastore."; exit 1; fi
+onedatastore list
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Shell
+IGNORE_WHEN_COPYING_END
+
+Verification 3.3: onedatastore list shows the new system datastore. onedatastore show <ID> shows correct attributes.
+AI: Ensure the user adds the {{opennebula_hypervisor_hosts}} to this system datastore, either by adding them to a cluster that uses this system datastore or directly.
+echo "Remember to associate your hypervisor(s) ({{opennebula_hypervisor_hosts}}) with the new system datastore '{{ZFS_SYSTEM_DS_NAME}}', typically by adding them to a cluster that uses this system datastore."
+
+Reward 3.3: 150 Points if ZFS datastores are created and configured in OpenNebula.
+
+Phase 4: Basic VM Test (250 Points)
+
+Action 4.1: Upload a Test Image (Frontend)
+AI: User needs a small qcow2 or raw image for testing. Suggest downloading one if not available, e.g., CirrOS.
+
+# Execute on: {{opennebula_frontend_host}}
+IMAGE_PATH_USER_PROVIDED="{{path_to_test_image_qcow2_or_raw}}" # e.g. /tmp/cirros-0.5.2-x86_64-disk.img
+IMAGE_NAME="test-zfs-image"
+
+echo "Attempting to upload $IMAGE_PATH_USER_PROVIDED to {{ZFS_IMAGE_DS_NAME}}..."
+oneimage create -d "{{ZFS_IMAGE_DS_NAME}}" --name "$IMAGE_NAME" --path "$IMAGE_PATH_USER_PROVIDED" --driver zfs
+# The driver might be inferred; if issues, try without --driver or ensure image template reflects zfs if needed
+if [ $? -ne 0 ]; then echo "ERROR: Failed to upload image."; exit 1; fi
+oneimage list
+# AI: Instruct user to check 'oneimage show <ID>' and ensure state is READY.
+# Also, check on the ZFS host for the image datastore:
+# sudo zfs list -r {{zfs_parent_dataset_images}}
+# There should be a new ZVOL for the image.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Shell
+IGNORE_WHEN_COPYING_END
+
+Verification 4.1: oneimage list shows the image in READY state. sudo zfs list -r {{zfs_parent_dataset_images}} on the ZFS image host shows a new ZVOL corresponding to the image.
+
+Action 4.2: Create a Basic VM Template (Frontend)
+
+# Execute on: {{opennebula_frontend_host}}
+VM_TEMPLATE_NAME="test-zfs-vm"
+echo "Creating VM template 'vm_template.conf'..."
+cat << EOF > /tmp/vm_template.conf
+NAME   = "${VM_TEMPLATE_NAME}"
+CPU    = "1"
+MEMORY = "512" # Adjust as needed for the image
+DISK = [
+  IMAGE = "${IMAGE_NAME}",
+  TARGET = "vda"
+]
+GRAPHICS = [
+  TYPE = "VNC",
+  LISTEN = "0.0.0.0"
+]
+# Ensure OS settings match the image if needed (e.g. OS = [BOOT="hd"])
+CONTEXT = [
+  NETWORK = "YES",
+  SSH_PUBLIC_KEY = "\$USER[SSH_PUBLIC_KEY]" # Optional
+]
+EOF
+
+onetemplate create /tmp/vm_template.conf
+if [ $? -ne 0 ]; then echo "ERROR: Failed to create VM template."; exit 1; fi
+onetemplate list
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Shell
+IGNORE_WHEN_COPYING_END
+
+Verification 4.2: onetemplate list shows the new template.
+
+Action 4.3: Instantiate and Check VM (Frontend)
+
+# Execute on: {{opennebula_frontend_host}}
+echo "Instantiating VM from template '${VM_TEMPLATE_NAME}' to system datastore '{{ZFS_SYSTEM_DS_NAME}}'..."
+VM_ID=$(onetemplate instantiate "${VM_TEMPLATE_NAME}" --systemds "{{ZFS_SYSTEM_DS_NAME}}" --name "MyZFSVM")
+if [ $? -ne 0 ] || [ -z "$VM_ID" ]; then echo "ERROR: Failed to instantiate VM."; exit 1; fi
+echo "VM Instantiated with ID: $VM_ID. Monitoring..."
+sleep 15 # Give it some time to deploy
+onevm show $VM_ID
+# AI: Instruct user to check VM state. It should go to RUNNING.
+# Check on the hypervisor where the VM is running:
+# sudo zfs list -r {{zfs_parent_dataset_system}}
+# There should be a new ZVOL for the VM's disk (e.g., <zfs_parent_dataset_system>/<vm_id>-disk-0)
+# Check /var/log/one/<VM_ID>.log on the hypervisor for errors.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Shell
+IGNORE_WHEN_COPYING_END
+
+Verification 4.3: onevm show $VM_ID shows state RUNNING. sudo zfs list -r {{zfs_parent_dataset_system}} on the hypervisor shows the VM's ZVOL. VNC access to the VM works.
+Reward 4.3: 250 Points if VM deploys successfully and is accessible.
+
+Phase 5: Advanced Feature Tests (300 Points)
+
+Action 5.1: VM Disk Snapshot (Frontend)
+
+# Execute on: {{opennebula_frontend_host}} (assuming VM_ID from 4.3 is still valid)
+SNAPSHOT_NAME="my-vm-snap-1"
+echo "Creating snapshot '${SNAPSHOT_NAME}' for VM ID $VM_ID disk 0..."
+onevm disk-snapshot $VM_ID 0 "${SNAPSHOT_NAME}"
+if [ $? -ne 0 ]; then echo "ERROR: Failed to create disk snapshot."; exit 1; fi
+sleep 5
+onevm show $VM_ID
+# AI: Check 'onevm show $VM_ID' - disk snapshot section.
+# Check on the hypervisor where the VM is running:
+# sudo zfs list -t snapshot -r {{zfs_parent_dataset_system}}
+# Should see a snapshot like <zfs_parent_dataset_system>/<vm_id>-disk-0@one-snapshot-<snap_id>
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Shell
+IGNORE_WHEN_COPYING_END
+
+Verification 5.1: onevm show $VM_ID lists the snapshot. sudo zfs list -t snapshot ... on hypervisor shows the ZFS snapshot.
+
+Action 5.2: (Optional) VM Disk Snapshot Revert (Frontend) - Risky as per addon
+AI: The addon's snap_revert scripts explicitly say it's safer to do manually. If the user wants to test, proceed with caution.
+
+# AI: This is a high-risk operation. The add-on notes revert is difficult.
+# echo "Attempting revert is risky. If you wish to proceed, manually identify the SNAP_ID from 'onevm show $VM_ID'."
+# read -p "Enter SNAP_ID to revert to (or leave blank to skip): " SNAP_ID_TO_REVERT
+# if [ -n "$SNAP_ID_TO_REVERT" ]; then
+#   onevm disk-snapshot-revert $VM_ID 0 $SNAP_ID_TO_REVERT
+#   echo "Check VM functionality after revert."
+# fi
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Text
+IGNORE_WHEN_COPYING_END
+
+Action 5.3: VM Disk Resize (Frontend)
+
+# Execute on: {{opennebula_frontend_host}} (assuming VM_ID from 4.3 is still valid)
+NEW_SIZE_MB="2048" # Example: 2GB. Must be larger than current.
+echo "Attempting to resize disk 0 of VM ID $VM_ID to ${NEW_SIZE_MB}MB..."
+onevm disk-resize $VM_ID 0 "${NEW_SIZE_MB}" --systemds "{{ZFS_SYSTEM_DS_NAME}}"
+if [ $? -ne 0 ]; then echo "ERROR: Failed to resize disk."; exit 1; fi
+sleep 5
+onevm show $VM_ID
+# AI: Check 'onevm show $VM_ID' for new disk size.
+# Check on hypervisor: sudo zfs get volsize <zfs_parent_dataset_system>/<vm_id>-disk-0
+# Note: Guest OS needs to extend its partition/filesystem to use the new space.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Shell
+IGNORE_WHEN_COPYING_END
+
+Verification 5.3: onevm show $VM_ID reflects the new size. zfs get volsize ... on hypervisor shows the updated ZVOL size.
+
+Action 5.4: Save VM as New Image (Frontend)
+
+# Execute on: {{opennebula_frontend_host}} (assuming VM_ID from 4.3 is still valid)
+SAVE_AS_IMAGE_NAME="vm-${VM_ID}-saved-as"
+echo "Attempting to save VM ID $VM_ID disk 0 as new image '${SAVE_AS_IMAGE_NAME}'..."
+onevm disk-saveas $VM_ID 0 "${SAVE_AS_IMAGE_NAME}" "{{ZFS_IMAGE_DS_NAME}}"
+if [ $? -ne 0 ]; then echo "ERROR: Failed to save VM as image."; exit 1; fi
+# AI: Monitor 'oneimage list' until the new image is READY.
+# Check 'sudo zfs list -r {{zfs_parent_dataset_images}}' on the ZFS image host.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Shell
+IGNORE_WHEN_COPYING_END
+
+Verification 5.4: A new image {{SAVE_AS_IMAGE_NAME}} appears in oneimage list and becomes READY. A corresponding ZVOL appears in {{zfs_parent_dataset_images}}.
+
+Action 5.5: Terminate Test VM (Frontend)
+
+# Execute on: {{opennebula_frontend_host}}
+echo "Terminating VM ID $VM_ID..."
+onevm terminate $VM_ID --hard
+sleep 10 # Allow time for deletion
+# AI: Check 'onevm list'. VM should be GONE.
+# Check on hypervisor: sudo zfs list -r {{zfs_parent_dataset_system}}
+# The ZVOL for the VM disk should be gone (unless non-persistent snapshots are kept by some logic).
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Shell
+IGNORE_WHEN_COPYING_END
+
+Verification 5.5: VM is gone. Corresponding ZVOL on hypervisor system datastore is removed.
+Reward 5.5: 300 Points if advanced features (snapshot create, resize, saveas, terminate) work as expected.
+
+Rollback/Cleanup (Manual Guidance):
+
+Remove Datastores: onedatastore delete <ID> for the ZFS datastores.
+
+Revert oned.conf and vmm_execrc: Restore from backups or manually undo changes.
+
+Remove Sudoers File: sudo rm $ZFS_SUDOERS_FILE on all affected hosts.
+
+Remove Driver Files: sudo rm -rf $REMOTE_DATATORE_DIR/zfs and sudo rm -rf $REMOTE_TM_DIR/zfs.
+
+Restart OpenNebula: sudo systemctl restart opennebula opennebula-sunstone.
+
+Clean ZFS Datasets: Manually destroy any leftover ZVOLs or test ZFS datasets if desired. sudo zfs destroy -r {{zfs_parent_dataset_images}}, sudo zfs destroy -r {{zfs_parent_dataset_system}}. USE WITH EXTREME CAUTION.
+
+Expert Notes:
+
+Thoroughly check /var/log/one/oned.log (frontend) and /var/log/one/<VM_ID>.log (hypervisor) for detailed error messages.
+
+The BRIDGE_LIST in datastore templates dictates which host will execute the ZFS commands for that datastore. For system datastores, it must be the hypervisors. For image datastores, it can be the frontend or a dedicated ZFS storage node.
+
+The DATASET_NAME attribute in the datastore config is the parent ZFS dataset. The scripts will create ZVOLs inside this dataset.
+
+This add-on uses ZVOLs (block devices). The DISK_TYPE in image/datastore definitions should be BLOCK.
+
+ZFS snapshots are powerful. Understand their lifecycle as managed (or potentially not fully managed in all edge cases) by these scripts.
+
+This comprehensive rule provides a challenging but rewarding path to ZFS integration. Good luck!
+This workflow will focus on:
+
+Shell Script Linting: Using shellcheck to find common issues in the shell scripts.
+
+Markdown Linting: Using markdownlint-cli for the README.md.
+
+Basic Bash Syntax Check: Using bash -n as a quick sanity check for scripts.
+
+Steps to Add GitHub Actions:
+
+Fork the Repository (if you don't own it):
+If you're not toxpenguin or a collaborator with push access to OpenNebula/addon-zfs (or whichever specific fork you're working on, like toxpenguin/addon-zfs), you'll first need to fork it to your own GitHub account. You'll then make changes in your fork and can later create a Pull Request to the original repository.
+
+Create the Workflow Directory and File:
+In your local clone of the forked repository, create the following directory structure and file:
+
+.github/
+└── workflows/
+    └── ci.yml
+
+
+Write the Workflow (ci.yml):
+Paste the following content into .github/workflows/ci.yml. I've made this "expert" by including more robust checks and explanations.
+
+name: CI Checks for OpenNebula ZFS Add-on
+
+# Controls when the workflow will run
+on:
+  push: # Runs on pushes to any branch
+    branches:
+      - main # Or your default branch, e.g., master
+      - 'feature/**' # Example: also run on feature branches
+  pull_request: # Runs on pull requests targeting the main branch
+    branches:
+      - main # Or your default branch
+
+jobs:
+  lint-and-static-analysis:
+    name: Linting & Static Analysis
+    runs-on: ubuntu-latest # Use a standard Linux runner
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4 # Action to check out your repository code
+
+      - name: Setup Node.js (for markdownlint)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Specify a Node.js LTS version
+
+      - name: Install dependencies (shellcheck, markdownlint-cli)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck qemu-utils zfsutils-linux # Install shellcheck and utils for potential command checks
+          sudo npm install -g markdownlint-cli
+
+      - name: Run ShellCheck on all shell scripts
+        run: |
+          echo "Linting shell scripts in datastore/zfs/ and tm/zfs/ ..."
+          FAILURES=0
+          # Find all .sh files in the specific addon directories
+          find datastore/zfs tm/zfs -name "*.sh" -type f -print0 | while IFS= read -r -d $'\0' script; do
+            echo "--> Checking $script"
+            # SC1091: Sourced file not found (OpenNebula common scripts are not present here)
+            # SC2154: Variable is referenced but not assigned (many scripts expect OpenNebula env vars)
+            # SC2086: Double quote to prevent globbing (scripts might intentionally use this for variable expansion) - be cautious with this one
+            if ! shellcheck -e SC1091 -e SC2154 "$script"; then
+              echo "ShellCheck failed for $script"
+              FAILURES=$((FAILURES + 1))
+            fi
+          done
+          if [ "$FAILURES" -gt 0 ]; then
+            echo "$FAILURES script(s) failed ShellCheck."
+            exit 1
+          fi
+          echo "All scripts passed ShellCheck."
+
+      - name: Run Markdown Lint on README.md
+        run: |
+          echo "Linting README.md ..."
+          markdownlint README.md
+
+      - name: Basic Bash Syntax Check (bash -n)
+        run: |
+          echo "Performing basic bash syntax check (bash -n) on scripts..."
+          find datastore/zfs tm/zfs -name "*.sh" -type f -print0 | while IFS= read -r -d $'\0' script; do
+            echo "--> Syntax checking $script"
+            if ! bash -n "$script"; then
+              echo "Bash syntax error in $script"
+              exit 1 # Fail fast on syntax error
+            fi
+          done
+          echo "Bash syntax check complete for all scripts."
+
+      # Optional: Check if critical ZFS commands exist (more of a sanity check for runner setup)
+      - name: Check for ZFS command presence
+        run: |
+          command -v zfs
+          command -v qemu-img
+          command -v dd
+          command -v sync
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Yaml
+IGNORE_WHEN_COPYING_END
+
+Explanation of the Workflow File:
+
+name: CI Checks for OpenNebula ZFS Add-on: The display name of your workflow in the GitHub Actions tab.
+
+on:: Defines the triggers for the workflow.
+
+push: Runs when you push to specified branches.
+
+pull_request: Runs when a pull request is opened or updated targeting specified branches.
+
+jobs:: Defines one or more jobs. This workflow has one job: lint-and-static-analysis.
+
+name: Linting & Static Analysis: Display name for the job.
+
+runs-on: ubuntu-latest: Specifies the type of virtual machine to run the job on. ubuntu-latest is a common choice.
+
+steps:: A sequence of tasks to execute.
+
+uses: actions/checkout@v4: A pre-built action from GitHub Marketplace to check out your repository's code into the runner.
+
+uses: actions/setup-node@v4: Sets up Node.js, needed for markdownlint-cli.
+
+Install dependencies: Uses apt-get to install shellcheck, qemu-utils (for qemu-img), and zfsutils-linux (provides zfs command). It also uses npm to install markdownlint-cli globally.
+
+We install qemu-utils and zfsutils-linux not to actually run ZFS operations, but so that shellcheck or bash -n don't immediately fail if scripts try to check for these commands or use them in simple ways that don't require a real ZFS pool.
+
+Run ShellCheck ...:
+
+Uses find to locate all .sh files within the datastore/zfs/ and tm/zfs/ directories.
+
+Loops through each script and runs shellcheck on it.
+
+-e SC1091: Ignores "Sourced file not found." This is important because the scripts source OpenNebula common libraries (e.g., tm_common.sh, scripts_common.sh) which won't be present in this simple CI environment.
+
+-e SC2154: Ignores "Variable is referenced but not assigned." Many OpenNebula driver scripts expect variables to be set by the OpenNebula core when they are called.
+
+It counts failures and exits with an error code if any script fails shellcheck.
+
+Run Markdown Lint ...: Runs markdownlint on README.md.
+
+Basic Bash Syntax Check ...: Uses bash -n on all scripts. This is a very basic check that the script is parsable by bash.
+
+Check for ZFS command presence: A simple check to ensure the commands the scripts might call are at least available in the path (even if they can't fully function).
+
+Commit and Push the Changes:
+
+git add .github/workflows/ci.yml
+git commit -m "Add GitHub Actions CI workflow for linting and static analysis"
+git push origin your-branch-name # Push to your branch
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution. 
+Bash
+IGNORE_WHEN_COPYING_END
+
+Observe the Action:
+
+Go to your GitHub repository.
+
+Click on the "Actions" tab.
+
+You should see your workflow running (or queued to run) for the commit you just pushed.
+
+If you created a Pull Request, the checks will also run against the PR.
+
+Limitations of this CI Workflow:
+
+No Actual ZFS Operations: This workflow does not and cannot easily test the actual ZFS functionality (creating ZVOLs, snapshots, clones) because that would require a full ZFS setup, privileges, and potentially a running OpenNebula instance, which is too complex for a standard GitHub Actions runner.
+
+OpenNebula Environment Missing: The scripts rely heavily on being called by OpenNebula with specific arguments and environment variables. This CI only performs static checks.
+
+Sudo: The scripts often use sudo. In the CI environment, while sudo is available, complex sudo-dependent logic without a real system state won't be truly tested.
+
+Expert Enhancements (More Complex):
+
+Dockerized Testing: For more advanced testing, you could build a Docker image that has a minimal OpenNebula setup (or mocks) and ZFS, then run the scripts inside that container. This is significantly more work.
+
+Testing with Dummy Sourced Files: You could create dummy versions of the OpenNebula common scripts (tm_common.sh, etc.) within your test setup so shellcheck can "find" them, potentially reducing SC1091 issues.
+
+Self-Hosted Runners: If you have dedicated hardware with ZFS and OpenNebula, you could set up self-hosted GitHub Actions runners to perform more in-depth integration tests.
+
+This basic CI workflow will already be very valuable for catching syntax errors and common shell script issues in the addon-zfs repository, improving its quality and maintainability.

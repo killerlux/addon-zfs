@@ -1,0 +1,71 @@
+name: CI Checks for OpenNebula ZFS Add-on
+
+on:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  lint-and-static-analysis:
+    name: Linting & Static Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (for markdownlint)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies (shellcheck, markdownlint-cli)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck qemu-utils zfsutils-linux
+          sudo npm install -g markdownlint-cli
+
+      - name: Run ShellCheck on all shell scripts
+        run: |
+          echo "Linting shell scripts in datastore/zfs/ and tm/zfs/ ..."
+          FAILURES=0
+          find datastore/zfs tm/zfs -name "*.sh" -type f -print0 | while IFS= read -r -d $'\0' script; do
+            echo "--> Checking $script"
+            if ! shellcheck -e SC1091 -e SC2154 "$script"; then
+              echo "ShellCheck failed for $script"
+              FAILURES=$((FAILURES + 1))
+            fi
+          done
+          if [ "$FAILURES" -gt 0 ]; then
+            echo "$FAILURES script(s) failed ShellCheck."
+            exit 1
+          fi
+          echo "All scripts passed ShellCheck."
+
+      - name: Run Markdown Lint on README.md
+        run: |
+          echo "Linting README.md ..."
+          markdownlint README.md
+
+      - name: Basic Bash Syntax Check (bash -n)
+        run: |
+          echo "Performing basic bash syntax check (bash -n) on scripts..."
+          find datastore/zfs tm/zfs -name "*.sh" -type f -print0 | while IFS= read -r -d $'\0' script; do
+            echo "--> Syntax checking $script"
+            if ! bash -n "$script"; then
+              echo "Bash syntax error in $script"
+              exit 1
+            fi
+          done
+          echo "Bash syntax check complete for all scripts."
+
+      - name: Check for ZFS command presence
+        run: |
+          command -v zfs
+          command -v qemu-img
+          command -v dd
+          command -v sync 
